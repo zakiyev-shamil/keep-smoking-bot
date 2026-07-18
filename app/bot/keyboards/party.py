@@ -17,7 +17,7 @@ from app.core.enums import EventType, PartyRole
 from app.models.party_member import PartyMember
 
 
-def party_keyboard(party_id: UUID) -> InlineKeyboardMarkup:
+def party_keyboard(party_id: UUID, *, is_owner: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for event_type in (
         EventType.SMOKE,
@@ -44,8 +44,37 @@ def party_keyboard(party_id: UUID) -> InlineKeyboardMarkup:
         text="🏢 Сменить Party",
         callback_data=PartyCallback(action="switch", party_id=party_id),
     )
-    builder.adjust(2, 1, 2, 1, 1)
+    if is_owner:
+        builder.button(
+            text="🗑 Удалить Party",
+            callback_data=PartyCallback(action="delete", party_id=party_id),
+        )
+        builder.adjust(2, 1, 2, 1, 1, 1)
+    else:
+        builder.adjust(2, 1, 2, 1, 1)
     return builder.as_markup()
+
+
+def delete_party_confirmation_keyboard(party_id: UUID) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🗑 Да, удалить",
+                    callback_data=PartyCallback(
+                        action="delete_confirm",
+                        party_id=party_id,
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data=PartyCallback(action="open", party_id=party_id).pack(),
+                )
+            ],
+        ]
+    )
 
 
 def stats_keyboard(party_id: UUID) -> InlineKeyboardMarkup:

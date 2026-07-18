@@ -40,6 +40,14 @@ def party_screen(name: str, members_count: int) -> str:
     return f"🏢 {name}\n\n👥 {members_count} участников\n\nЧто делаем?"
 
 
+def delete_party_confirmation(name: str) -> str:
+    return (
+        f"Удалить Party «{name}»?\n\n"
+        "Все события, ответы и результаты опросов будут удалены без возможности восстановления. "
+        "Участники потеряют доступ к Party."
+    )
+
+
 def event_confirmation(event_type, party_name: str, recipients: int) -> str:
     return (
         f"{event_type.emoji} Позвать {party_name}: «{event_type.default_title}»?\n\n"

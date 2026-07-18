@@ -219,3 +219,26 @@ class PartyService:
             return None
         await self.set_active_party(user_id, parties[0].id)
         return parties[0]
+
+    async def delete_party(self, party_id: UUID, requester_id: UUID) -> str:
+        async with self.session.begin():
+            party = await self.repository.get(party_id, for_update=True)
+            if party is None:
+                raise PartyNotFoundError
+            membership = await self.repository.get_membership(
+                party_id,
+                requester_id,
+                for_update=True,
+            )
+            if membership is None or not membership.is_active:
+                raise NotPartyMemberError
+            if party.owner_id != requester_id or membership.role != PartyRole.OWNER:
+                raise PermissionDeniedError
+            party_name = party.name
+            await self.repository.delete_tree(party_id)
+        logger.info(
+            "party_deleted",
+            party_id=str(party_id),
+            owner_id=str(requester_id),
+        )
+        return party_name

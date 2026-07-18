@@ -14,6 +14,7 @@ from app.bot.callbacks.party import (
 )
 from app.bot.keyboards.common import cancel_fsm_keyboard, party_selector_keyboard
 from app.bot.keyboards.party import (
+    delete_party_confirmation_keyboard,
     members_keyboard,
     party_created_keyboard,
     party_keyboard,
@@ -23,6 +24,7 @@ from app.bot.states.party import CreatePartyState
 from app.bot.texts.ru import (
     CREATE_PARTY_NAME,
     INVALID_PARTY_NAME,
+    delete_party_confirmation,
     members_text,
     party_created,
     party_screen,
@@ -30,7 +32,7 @@ from app.bot.texts.ru import (
 )
 from app.bot.utils import edit_or_answer
 from app.core.enums import PartyRole
-from app.core.exceptions import PartyNameInvalidError
+from app.core.exceptions import PartyNameInvalidError, PermissionDeniedError
 from app.models.user import User
 from app.services.container import RequestServices, ServiceContainer
 
@@ -77,15 +79,58 @@ async def open_party(
     state: FSMContext,
 ) -> None:
     await state.clear()
-    party, _ = await services.parties.get_party_for_member(callback_data.party_id, current_user.id)
+    party, membership = await services.parties.get_party_for_member(
+        callback_data.party_id,
+        current_user.id,
+    )
     await services.parties.set_active_party(current_user.id, party.id)
     count = await services.parties.count_members(party.id)
     if callback.message:
         await edit_or_answer(
             callback.message,
             party_screen(party.name, count),
-            party_keyboard(party.id),
+            party_keyboard(
+                party.id,
+                is_owner=membership.role == PartyRole.OWNER,
+            ),
         )
+
+
+@router.callback_query(PartyCallback.filter(F.action == "delete"))
+async def confirm_delete_party(
+    callback: CallbackQuery,
+    callback_data: PartyCallback,
+    current_user: User,
+    services: RequestServices,
+) -> None:
+    party, membership = await services.parties.get_party_for_member(
+        callback_data.party_id,
+        current_user.id,
+    )
+    if membership.role != PartyRole.OWNER or party.owner_id != current_user.id:
+        raise PermissionDeniedError
+    if callback.message:
+        await edit_or_answer(
+            callback.message,
+            delete_party_confirmation(party.name),
+            delete_party_confirmation_keyboard(party.id),
+        )
+
+
+@router.callback_query(PartyCallback.filter(F.action == "delete_confirm"))
+async def delete_party(
+    callback: CallbackQuery,
+    callback_data: PartyCallback,
+    current_user: User,
+    services: RequestServices,
+    state: FSMContext,
+) -> None:
+    await services.parties.delete_party(callback_data.party_id, current_user.id)
+    await state.clear()
+    if callback.message:
+        from app.bot.handlers.common import show_menu
+
+        await show_menu(callback.message, current_user, services, edit=True)
 
 
 @router.callback_query(PartyCallback.filter(F.action == "switch"))
@@ -135,8 +180,6 @@ async def show_invite(
         callback_data.party_id, current_user.id
     )
     if membership.role not in {PartyRole.OWNER, PartyRole.ADMIN}:
-        from app.core.exceptions import PermissionDeniedError
-
         raise PermissionDeniedError
     username = container.settings.bot_username or (await bot.get_me()).username
     invite_url = container.invitations.deep_link(username, party.invite_code)

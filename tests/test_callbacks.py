@@ -8,7 +8,7 @@ from app.bot.callbacks.event import (
     compact_uuid,
     expand_uuid,
 )
-from app.bot.callbacks.party import PartyMemberAdminCallback
+from app.bot.callbacks.party import PartyCallback, PartyMemberAdminCallback
 from app.bot.callbacks.settings import SettingsCallback
 from app.bot.handlers import build_router
 from app.bot.keyboards.party import party_keyboard
@@ -25,6 +25,7 @@ def test_critical_callback_payloads_fit_telegram_limit():
             option_id=compact_uuid(identifier),
         ).pack(),
         PartyMemberAdminCallback(action="promote", membership_id=identifier).pack(),
+        PartyCallback(action="delete_confirm", party_id=identifier).pack(),
         SettingsCallback(action="custom", party_id=identifier).pack(),
     ]
 
@@ -51,3 +52,17 @@ def test_primary_party_menu_contains_only_enabled_event_types():
     assert "🎮 Своё событие" in labels
     assert "☕ Го кофе" not in labels
     assert "🍺 После работы" not in labels
+
+
+def test_only_owner_party_menu_contains_delete_action():
+    member_labels = [
+        button.text for row in party_keyboard(uuid4()).inline_keyboard for button in row
+    ]
+    owner_labels = [
+        button.text
+        for row in party_keyboard(uuid4(), is_owner=True).inline_keyboard
+        for button in row
+    ]
+
+    assert "🗑 Удалить Party" not in member_labels
+    assert "🗑 Удалить Party" in owner_labels

@@ -2,14 +2,20 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.core.enums import EventCreationPolicy, PartyRole
+from app.models.event import Event
+from app.models.event_poll_option import EventPollOption
+from app.models.event_poll_vote import EventPollVote
+from app.models.event_response import EventResponse
+from app.models.notification import Notification
 from app.models.party import Party
 from app.models.party_member import PartyMember
 from app.models.user import User
+from app.models.user_runtime_state import UserRuntimeState
 
 
 class PartyRepository:
@@ -106,3 +112,21 @@ class PartyRepository:
             .limit(limit)
         )
         return list(result.unique())
+
+    async def delete_tree(self, party_id: UUID) -> None:
+        event_ids = select(Event.id).where(Event.party_id == party_id)
+        for model in (
+            Notification,
+            EventPollVote,
+            EventPollOption,
+            EventResponse,
+        ):
+            await self.session.execute(delete(model).where(model.event_id.in_(event_ids)))
+        await self.session.execute(delete(Event).where(Event.party_id == party_id))
+        await self.session.execute(delete(PartyMember).where(PartyMember.party_id == party_id))
+        await self.session.execute(
+            update(UserRuntimeState)
+            .where(UserRuntimeState.active_party_id == party_id)
+            .values(active_party_id=None)
+        )
+        await self.session.execute(delete(Party).where(Party.id == party_id))

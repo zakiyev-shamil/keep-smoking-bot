@@ -16,6 +16,7 @@ from app.bot.texts.ru import (
     party_screen,
 )
 from app.bot.utils import edit_or_answer
+from app.core.enums import PartyRole
 from app.core.exceptions import InvalidInvitationError
 from app.models.user import User
 from app.services.container import RequestServices
@@ -45,13 +46,26 @@ async def show_menu(
         else:
             await message.answer(text, reply_markup=keyboard)
         return
-    party = parties[0]
+    party, membership = await services.parties.get_party_for_member(
+        parties[0].id,
+        current_user.id,
+    )
     await services.parties.set_active_party(current_user.id, party.id)
     count = await services.parties.count_members(party.id)
     if edit:
-        await edit_or_answer(message, party_screen(party.name, count), party_keyboard(party.id))
+        await edit_or_answer(
+            message,
+            party_screen(party.name, count),
+            party_keyboard(party.id, is_owner=membership.role == PartyRole.OWNER),
+        )
     else:
-        await message.answer(party_screen(party.name, count), reply_markup=party_keyboard(party.id))
+        await message.answer(
+            party_screen(party.name, count),
+            reply_markup=party_keyboard(
+                party.id,
+                is_owner=membership.role == PartyRole.OWNER,
+            ),
+        )
 
 
 @router.message(CommandStart())
@@ -70,10 +84,17 @@ async def start(
             await message.answer(INVALID_INVITATION, reply_markup=menu_keyboard())
             return
         await message.answer(party_joined(result.party.name, result.joined))
+        _, membership = await services.parties.get_party_for_member(
+            result.party.id,
+            current_user.id,
+        )
         count = await services.parties.count_members(result.party.id)
         await message.answer(
             party_screen(result.party.name, count),
-            reply_markup=party_keyboard(result.party.id),
+            reply_markup=party_keyboard(
+                result.party.id,
+                is_owner=membership.role == PartyRole.OWNER,
+            ),
         )
         return
     await show_menu(message, current_user, services)

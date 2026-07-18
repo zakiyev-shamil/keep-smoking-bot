@@ -25,6 +25,7 @@ from app.bot.keyboards.event import (
     lunch_setup_keyboard,
 )
 from app.bot.keyboards.party import (
+    delete_party_confirmation_keyboard,
     members_keyboard,
     party_created_keyboard,
     party_keyboard,
@@ -67,6 +68,7 @@ class Screen(StrEnum):
     SETTINGS = "settings"
     STATS = "stats"
     ERROR = "error"
+    DELETE_PARTY_CONFIRM = "delete_party_confirm"
 
 
 SCREEN_TEXTS = {
@@ -95,6 +97,7 @@ SCREEN_TEXTS = {
     Screen.SETTINGS: "🔔 Уведомления\n\nВыбери, какие события тебе присылать.",
     Screen.STATS: "📊 Твоя статистика · Backend",
     Screen.ERROR: "Сценарий устарел. Открой меню и попробуй ещё раз.",
+    Screen.DELETE_PARTY_CONFIRM: "Удалить Party «Backend»?",
 }
 
 
@@ -151,7 +154,7 @@ def keyboard_for(screen: Screen) -> InlineKeyboardMarkup:
     if screen == Screen.NO_PARTY:
         return no_party_keyboard()
     if screen == Screen.PARTY:
-        return party_keyboard(PARTY_ID)
+        return party_keyboard(PARTY_ID, is_owner=True)
     if screen == Screen.PARTY_SELECTOR:
         return party_selector_keyboard([_party()])
     if screen in {Screen.CREATE_PARTY_INPUT, Screen.CUSTOM_INPUT, Screen.POLL_INPUT}:
@@ -241,6 +244,8 @@ def keyboard_for(screen: Screen) -> InlineKeyboardMarkup:
         return notification_settings_keyboard(_settings(), PARTY_ID)
     if screen == Screen.STATS:
         return stats_keyboard(PARTY_ID)
+    if screen == Screen.DELETE_PARTY_CONFIRM:
+        return delete_party_confirmation_keyboard(PARTY_ID)
     return menu_keyboard()
 
 
@@ -280,6 +285,10 @@ def next_screen(current: Screen, callback_data: str) -> Screen:
             return Screen.EVENT_DONE
         return Screen.EVENT_MEMBER
     if prefix == "pty":
+        if action == "delete":
+            return Screen.DELETE_PARTY_CONFIRM
+        if action == "delete_confirm":
+            return Screen.PARTY
         return {
             "open": Screen.PARTY,
             "switch": Screen.PARTY_SELECTOR,
