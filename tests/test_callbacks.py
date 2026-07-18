@@ -4,6 +4,9 @@ from app.bot.callbacks.event import (
     CustomEventCallback,
     EventActionCallback,
     EventConfirmCallback,
+    PollVoteCallback,
+    compact_uuid,
+    expand_uuid,
 )
 from app.bot.callbacks.party import PartyMemberAdminCallback
 from app.bot.callbacks.settings import SettingsCallback
@@ -17,11 +20,21 @@ def test_critical_callback_payloads_fit_telegram_limit():
         EventActionCallback(action="cancel_confirm", event_id=identifier).pack(),
         EventConfirmCallback(party_id=identifier, event_type="after_work").pack(),
         CustomEventCallback(action="confirm", party_id=identifier).pack(),
+        PollVoteCallback(
+            event_id=compact_uuid(identifier),
+            option_id=compact_uuid(identifier),
+        ).pack(),
         PartyMemberAdminCallback(action="promote", membership_id=identifier).pack(),
         SettingsCallback(action="custom", party_id=identifier).pack(),
     ]
 
     assert all(len(payload.encode()) <= 64 for payload in payloads)
+
+
+def test_compact_uuid_callback_round_trip():
+    identifier = uuid4()
+
+    assert expand_uuid(compact_uuid(identifier)) == identifier
 
 
 def test_global_error_handler_is_registered_on_root_router():

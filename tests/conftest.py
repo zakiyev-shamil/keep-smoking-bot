@@ -10,6 +10,8 @@ from app.database.base import Base
 from app.models import (  # noqa: F401
     BotFsmState,
     Event,
+    EventPollOption,
+    EventPollVote,
     EventResponse,
     Notification,
     Party,

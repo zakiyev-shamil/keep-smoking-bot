@@ -92,3 +92,51 @@ async def test_response_refreshes_delivered_invitation(session_factory):
     assert "✅ Ты идёшь" in labels
     assert "🔄 Обновить" not in labels
     assert details.became_going is True
+
+
+async def test_refresh_excludes_actor_invitation_after_actor_edit(session_factory):
+    settings = make_settings(smoke_cooldown_minutes=0)
+    async with session_factory() as session:
+        party, users = await party_with_members(session, members=3)
+        event = await EventService(session, settings).create_event(
+            party.id,
+            users[0].id,
+            EventType.SMOKE,
+        )
+        session.add_all(
+            [
+                Notification(
+                    event_id=event.id,
+                    recipient_id=users[1].id,
+                    status=NotificationStatus.SENT,
+                    telegram_message_id=701,
+                ),
+                Notification(
+                    event_id=event.id,
+                    recipient_id=users[2].id,
+                    status=NotificationStatus.SENT,
+                    telegram_message_id=702,
+                ),
+            ]
+        )
+        await session.commit()
+        event_id = event.id
+        creator_id = users[0].id
+        actor_id = users[1].id
+        actor_telegram_id = users[1].telegram_user_id
+        other_telegram_id = users[2].telegram_user_id
+
+    bot = RecordingBot()
+    views = EventViewService(session_factory, bot, settings)
+    await views.register_creator_message(
+        event_id=event_id,
+        creator_id=creator_id,
+        chat_id=123,
+        message_id=456,
+    )
+
+    await views.refresh_event_messages(event_id, exclude_user_id=actor_id)
+
+    edited_chat_ids = {edit["chat_id"] for edit in bot.edits}
+    assert edited_chat_ids == {123, other_telegram_id}
+    assert actor_telegram_id not in edited_chat_ids

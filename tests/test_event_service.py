@@ -87,10 +87,16 @@ async def test_response_reports_only_real_transition_to_going(session):
     repeated = await service.respond(event.id, users[1].id, ResponseType.GOING)
 
     assert later.response_changed is True
+    assert later.previous_response is None
+    assert later.current_response == ResponseType.LATER
     assert later.became_going is False
     assert going.response_changed is True
+    assert going.previous_response == ResponseType.LATER
+    assert going.current_response == ResponseType.GOING
     assert going.became_going is True
     assert repeated.response_changed is False
+    assert repeated.previous_response == ResponseType.GOING
+    assert repeated.current_response == ResponseType.GOING
     assert repeated.became_going is False
 
 

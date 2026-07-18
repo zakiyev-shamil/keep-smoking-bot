@@ -21,6 +21,8 @@ from app.bot.keyboards.event import (
     event_details_keyboard,
     event_response_keyboard,
     event_summary_keyboard,
+    lunch_poll_confirmation_keyboard,
+    lunch_setup_keyboard,
 )
 from app.bot.keyboards.party import (
     members_keyboard,
@@ -32,6 +34,7 @@ from app.bot.keyboards.settings import notification_settings_keyboard
 from app.core.enums import EventType, PartyRole, ResponseType
 from app.models.notification_settings import UserNotificationSettings
 from app.models.party import Party
+from app.services.dto import EventPoll, EventPollOptionDetails
 
 PARTY_ID = UUID("00000000-0000-0000-0000-000000000001")
 EVENT_ID = UUID("00000000-0000-0000-0000-000000000002")
@@ -45,6 +48,9 @@ class Screen(StrEnum):
     CREATE_PARTY_INPUT = "create_party_input"
     PARTY_CREATED = "party_created"
     EVENT_CONFIRM = "event_confirm"
+    LUNCH_SETUP = "lunch_setup"
+    POLL_INPUT = "poll_input"
+    POLL_CONFIRM = "poll_confirm"
     CUSTOM_INPUT = "custom_input"
     CUSTOM_CONFIRM = "custom_confirm"
     DUPLICATE = "duplicate"
@@ -54,6 +60,9 @@ class Screen(StrEnum):
     EVENT_DONE = "event_done"
     CANCEL_CONFIRM = "cancel_confirm"
     EVENT_SUMMARY = "event_summary"
+    POLL_INVITATION = "poll_invitation"
+    POLL_ACTIVE = "poll_active"
+    POLL_READONLY = "poll_readonly"
     MEMBERS = "members"
     SETTINGS = "settings"
     STATS = "stats"
@@ -67,6 +76,9 @@ SCREEN_TEXTS = {
     Screen.CREATE_PARTY_INPUT: "Введите название Party.",
     Screen.PARTY_CREATED: "🏢 Backend создана.\n\nТеперь пригласи коллег.",
     Screen.EVENT_CONFIRM: "🚬 Позвать Backend: «Го курить»?",
+    Screen.LUNCH_SETUP: "🍔 Как позвать коллег на обед?",
+    Screen.POLL_INPUT: "Введи 2–6 вариантов.",
+    Screen.POLL_CONFIRM: "🍔 Опрос для Backend\n\n1. Плов\n2. Пицца",
     Screen.CUSTOM_INPUT: "Что за событие?\n\nНазвание — от 1 до 100 символов.",
     Screen.CUSTOM_CONFIRM: "🎮 Настолки\n\nПозвать Backend?",
     Screen.DUPLICATE: "🚬 Уже есть активное предложение.",
@@ -76,6 +88,9 @@ SCREEN_TEXTS = {
     Screen.EVENT_DONE: "🚬 Го курить\n\nСтатус: Уже вышли\n\n✅ Идут — 2",
     Screen.CANCEL_CONFIRM: "Отменить событие?",
     Screen.EVENT_SUMMARY: "👋 Максим теперь идёт\n\n🚬 Го курить · Backend",
+    Screen.POLL_INVITATION: "🍔 Го обедать\n\n📊 Куда идём:\n1. Плов — 1",
+    Screen.POLL_ACTIVE: "🍔 Го обедать\n\n📊 Куда идём:\n1. Плов — 2",
+    Screen.POLL_READONLY: "🍔 Го обедать\n\nГолосование завершено.",
     Screen.MEMBERS: "👥 Backend\n\n3 участника",
     Screen.SETTINGS: "🔔 Уведомления\n\nВыбери, какие события тебе присылать.",
     Screen.STATS: "📊 Твоя статистика · Backend",
@@ -108,6 +123,30 @@ def _party() -> Party:
     )
 
 
+def _poll(*, read_only: bool = False) -> EventPoll:
+    options = [
+        EventPollOptionDetails(
+            id=UUID("00000000-0000-0000-0000-000000000010"),
+            text="Плов",
+            position=0,
+            vote_count=2,
+            selected=True,
+        ),
+        EventPollOptionDetails(
+            id=UUID("00000000-0000-0000-0000-000000000011"),
+            text="Пицца",
+            position=1,
+            vote_count=1,
+            selected=False,
+        ),
+    ]
+    return EventPoll(
+        options=options,
+        selected_option_id=options[0].id,
+        read_only=read_only,
+    )
+
+
 def keyboard_for(screen: Screen) -> InlineKeyboardMarkup:
     if screen == Screen.NO_PARTY:
         return no_party_keyboard()
@@ -115,18 +154,24 @@ def keyboard_for(screen: Screen) -> InlineKeyboardMarkup:
         return party_keyboard(PARTY_ID)
     if screen == Screen.PARTY_SELECTOR:
         return party_selector_keyboard([_party()])
-    if screen in {Screen.CREATE_PARTY_INPUT, Screen.CUSTOM_INPUT}:
+    if screen in {Screen.CREATE_PARTY_INPUT, Screen.CUSTOM_INPUT, Screen.POLL_INPUT}:
         return cancel_fsm_keyboard()
     if screen == Screen.PARTY_CREATED:
         return party_created_keyboard(PARTY_ID, "https://t.me/test_bot?start=join_token")
     if screen == Screen.EVENT_CONFIRM:
         return event_confirmation_keyboard(PARTY_ID, EventType.SMOKE)
+    if screen == Screen.LUNCH_SETUP:
+        return lunch_setup_keyboard(PARTY_ID)
+    if screen == Screen.POLL_CONFIRM:
+        return lunch_poll_confirmation_keyboard(PARTY_ID)
     if screen == Screen.CUSTOM_CONFIRM:
         return custom_confirmation_keyboard(PARTY_ID)
     if screen == Screen.DUPLICATE:
         return duplicate_event_keyboard(EVENT_ID)
     if screen == Screen.INVITATION:
         return event_response_keyboard(EVENT_ID)
+    if screen == Screen.POLL_INVITATION:
+        return event_response_keyboard(EVENT_ID, poll=_poll())
     if screen == Screen.EVENT_MEMBER:
         return event_details_keyboard(
             event_id=EVENT_ID,
@@ -146,6 +191,28 @@ def keyboard_for(screen: Screen) -> InlineKeyboardMarkup:
             can_respond=False,
             can_start=True,
             can_cancel=True,
+        )
+    if screen == Screen.POLL_ACTIVE:
+        return event_details_keyboard(
+            event_id=EVENT_ID,
+            party_id=PARTY_ID,
+            selected=ResponseType.GOING,
+            is_active=True,
+            can_respond=True,
+            can_start=False,
+            can_cancel=False,
+            poll=_poll(),
+        )
+    if screen == Screen.POLL_READONLY:
+        return event_details_keyboard(
+            event_id=EVENT_ID,
+            party_id=PARTY_ID,
+            selected=ResponseType.GOING,
+            is_active=False,
+            can_respond=False,
+            can_start=False,
+            can_cancel=False,
+            poll=_poll(read_only=True),
         )
     if screen == Screen.EVENT_DONE:
         return event_details_keyboard(
@@ -193,11 +260,19 @@ def next_screen(current: Screen, callback_data: str) -> Screen:
     if prefix == "menu":
         return Screen.CREATE_PARTY_INPUT if action == "create_party" else Screen.PARTY
     if prefix == "new":
-        return Screen.CUSTOM_INPUT if parts[-1] == EventType.CUSTOM.value else Screen.EVENT_CONFIRM
+        if parts[-1] == EventType.CUSTOM.value:
+            return Screen.CUSTOM_INPUT
+        if parts[-1] == EventType.LUNCH.value:
+            return Screen.LUNCH_SETUP
+        return Screen.EVENT_CONFIRM
     if prefix == "ec":
         return Screen.EVENT_CREATOR
     if prefix == "custom":
         return Screen.CUSTOM_INPUT if action == "edit" else Screen.EVENT_CREATOR
+    if prefix == "lp":
+        return Screen.POLL_INPUT if action in {"add", "edit"} else Screen.EVENT_CREATOR
+    if prefix == "pv":
+        return Screen.POLL_ACTIVE
     if prefix == "evt":
         if action == "cancel":
             return Screen.CANCEL_CONFIRM

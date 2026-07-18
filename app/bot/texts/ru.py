@@ -51,6 +51,11 @@ def custom_event_confirmation(title: str, party_name: str, recipients: int) -> s
     return f"🎮 {title}\n\nПозвать {party_name}?\n\nПолучат уведомление: {recipients} человек."
 
 
+def lunch_poll_preview(options: list[str], party_name: str, recipients: int) -> str:
+    variants = "\n".join(f"{index}. {option}" for index, option in enumerate(options, start=1))
+    return f"🍔 Опрос для {party_name}\n\n{variants}\n\nПолучат уведомление: {recipients} человек."
+
+
 def event_started_notification(event: Event) -> str:
     return f"{event.type.emoji} Выходим!\n\n{event.party.name} уже собирается."
 
@@ -59,12 +64,13 @@ def event_cancelled_notification(event: Event) -> str:
     return f"{event.type.emoji} Событие «{event.title}» отменено."
 
 
-def participant_joined_notification(event: Event, user: User, going_count: int) -> str:
-    return (
-        f"👋 {display_name(user)} теперь идёт\n\n"
-        f"{event.type.emoji} {event.title} · {event.party.name}\n"
-        f"✅ Всего идут — {going_count}"
-    )
+def response_changed_notification(user: User, response: ResponseType) -> str:
+    name = display_name(user)
+    return {
+        ResponseType.GOING: f"{name} теперь идёт",
+        ResponseType.LATER: f"{name} будет через 5 минут",
+        ResponseType.DECLINED: f"{name} больше не идёт",
+    }[response]
 
 
 def event_details_text(details: EventDetails) -> str:
@@ -79,6 +85,15 @@ def event_details_text(details: EventDetails) -> str:
     going_names = "\n".join(f"• {display_name(user)}" for user in stats.going_users)
     if not going_names:
         going_names = "—"
+    poll_text = ""
+    if details.poll is not None:
+        poll_lines = "\n".join(
+            f"{option.position + 1}. {option.text} — {option.vote_count}"
+            for option in details.poll.options
+        )
+        poll_text = f"\n\n📊 Куда идём:\n{poll_lines}"
+        if details.poll.read_only:
+            poll_text += "\nГолосование завершено."
     return (
         f"{event.type.emoji} {event.title}\n"
         f"{display_name(event.creator)} зовёт {event.party.name}.\n"
@@ -87,6 +102,7 @@ def event_details_text(details: EventDetails) -> str:
         f"⏱ Через 5 минут — {stats.later_count}\n"
         f"❌ Пас — {stats.declined_count}\n\n"
         f"Идут:\n{going_names}"
+        f"{poll_text}"
     )
 
 
@@ -140,4 +156,6 @@ DOMAIN_MESSAGES = {
     "EventExpiredError": "Событие уже завершилось.",
     "EventNotActiveError": "Событие уже не активно.",
     "InvalidEventTitleError": "Название события должно содержать от 1 до 100 символов.",
+    "InvalidPollOptionsError": "Проверь варианты опроса и попробуй ещё раз.",
+    "InvalidPollOptionError": "Этот вариант больше недоступен.",
 }

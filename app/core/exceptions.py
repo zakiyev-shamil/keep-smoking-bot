@@ -51,5 +51,13 @@ class InvalidEventTitleError(DomainError):
     pass
 
 
+class InvalidPollOptionsError(DomainError):
+    pass
+
+
+class InvalidPollOptionError(DomainError):
+    pass
+
+
 class PartyNameInvalidError(DomainError):
     pass

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import NullPool
 
 
 def create_engine(
@@ -18,8 +18,13 @@ def create_engine(
     serverless: bool = False,
 ) -> AsyncEngine:
     options: dict[str, object] = {"echo": echo}
-    if serverless:
-        options["poolclass"] = NullPool
+    if serverless and make_url(database_url).get_backend_name() == "postgresql":
+        options.update(
+            pool_size=3,
+            max_overflow=2,
+            pool_timeout=5,
+            pool_recycle=240,
+        )
     else:
         options["pool_pre_ping"] = True
     return create_async_engine(database_url, **options)

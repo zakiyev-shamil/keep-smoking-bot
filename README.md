@@ -2,6 +2,7 @@
 
 Telegram-first бот для закрытых офисных Party. Участник создаёт универсальное событие,
 коллеги получают личное уведомление и отвечают `GOING`, `LATER` или `DECLINED`.
+Для обеда создатель при желании добавляет общий inline-опрос на 2–6 вариантов.
 
 ```text
 User → Party → Event → Notification → EventResponse
@@ -27,9 +28,10 @@ alembic/            миграции
 tests/              unit и state-machine tests
 ```
 
-PostgreSQL — единственный source of truth. В нём хранятся данные, FSM, выбранная Party и
-ссылка на последнее сообщение создателя. Дубли событий защищены транзакционным advisory
-lock и partial unique index. Redis для MVP до 20 человек не нужен.
+PostgreSQL — единственный source of truth. В нём хранятся данные, FSM, выбранная Party,
+ссылка на последнее сообщение создателя и агрегированные голоса обеденного опроса.
+Дубли событий защищены транзакционным advisory lock и partial unique index. Redis для
+MVP до 20 человек не нужен.
 
 На Vercel уведомления выполняются внутри webhook-запроса с bounded concurrency и rate
 limiter. Результаты доставки сохраняются в `notifications`, поэтому повторная доставка
@@ -52,7 +54,8 @@ Compose поднимает bot и PostgreSQL, применяет `alembic upgrad
 ### 1. Neon
 
 Создайте PostgreSQL в ближайшем регионе. Neon Auth включать не нужно. Скопируйте
-**pooled connection string**: hostname обычно содержит `-pooler`.
+**pooled connection string**: hostname должен содержать `-pooler`. Direct URL нужен
+только для Alembic.
 
 ### 2. Vercel
 
@@ -74,6 +77,11 @@ Compose поднимает bot и PostgreSQL, применяет `alembic upgrad
 `postgresql://...?sslmode=require&channel_binding=require`: config автоматически
 преобразует его для `asyncpg`.
 
+В `vercel.json` явно включён Fluid Compute и закреплён `fra1`. Runtime переиспользует
+небольшой SQLAlchemy pool (`3 + 2 overflow`, timeout `5 с`, recycle `240 с`), поэтому
+production `DATABASE_URL` обязательно должен оставаться pooled. Fluid Compute сокращает
+cold start, но бесплатный serverless не гарантирует его полного отсутствия.
+
 ### 3. Миграции Neon
 
 Один раз из checkout репозитория. Для миграции лучше скопировать из Neon **direct
@@ -89,6 +97,12 @@ unset DATABASE_URL
 
 Не сохраняйте production connection string в Git и не отправляйте его в чат.
 
+Порядок production-выпуска:
+
+1. Убедиться, что Vercel `DATABASE_URL` — pooled URL с `-pooler`.
+2. Выполнить `alembic upgrade head` с direct URL без `-pooler`.
+3. Развернуть приложение и проверить сценарий создатель + два участника.
+
 ### 4. Webhook Telegram
 
 После production deploy возьмите URL вида `https://project.vercel.app`. В локальном
@@ -102,9 +116,11 @@ WEBHOOK_BASE_URL=https://project.vercel.app .venv/bin/python scripts/set_webhook
 
 ```bash
 curl https://project.vercel.app/api/health
+curl https://project.vercel.app/api/health/database
 ```
 
-Ожидаемый ответ: `{"status":"ok"}`. После этого отправьте боту `/start`.
+Второй endpoint дополнительно проверяет pooled runtime-соединение и актуальную Alembic
+revision. После этого отправьте боту `/start`.
 
 Важно: одновременно должен работать только один способ получения updates. После включения
 webhook остановите локальный polling-контейнер:
@@ -129,6 +145,7 @@ docker compose stop bot
 - `<TYPE>_EVENT_TTL_MINUTES`
 - `<TYPE>_COOLDOWN_MINUTES`
 - `NOTIFICATION_CONCURRENCY`
+- `INVITATION_REFRESH_CONCURRENCY` (по умолчанию `5`)
 - `NOTIFICATION_RATE_PER_SECOND`
 - `NOTIFY_ON_EVENT_STARTED`
 - `NOTIFY_ON_EVENT_CANCELLED`
@@ -177,8 +194,14 @@ pytest
 ```
 
 Тесты покрывают Party, idempotency, duplicate protection, cooldown, expiration, response
-upsert, permissions, filtering, PostgreSQL FSM и случайные последовательности domain
-команд через Hypothesis.
+и poll upsert, permissions, filtering, PostgreSQL FSM, Alembic upgrade/check/downgrade и
+случайные последовательности domain-команд через Hypothesis.
+
+В structured logs есть `event_response_pipeline_timing` с этапами `db_ms`,
+`actor_edit_ms`, `status_notification_ms`, `invitation_refresh_ms`, а Vercel webhook
+пишет `vercel_invocation_*` с признаком `cold`/`warm`. Для тёплого изменения сообщения
+автора целевой ориентир — менее `1 с`; редкие cold start остаются ограничением выбранного
+serverless-варианта.
 
 ## Ограничения Telegram
 

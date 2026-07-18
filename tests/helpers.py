@@ -29,8 +29,15 @@ async def add_user(
     return user
 
 
-async def party_with_members(session, members: int = 2):
-    users = [await add_user(session, 1000 + index, f"User {index}") for index in range(members)]
+async def party_with_members(session, members: int = 2, telegram_start: int = 1000):
+    users = [
+        await add_user(
+            session,
+            telegram_start + index,
+            f"User {index}",
+        )
+        for index in range(members)
+    ]
     service = PartyService(session, InvitationService())
     party = await service.create_party(users[0].id, "Backend")
     for user in users[1:]:

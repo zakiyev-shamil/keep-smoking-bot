@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from uuid import UUID
 
 from aiogram import Bot
@@ -16,6 +17,7 @@ from app.core.exceptions import DomainError
 from app.repositories.events import EventRepository
 from app.repositories.notifications import NotificationMessageTarget, NotificationRepository
 from app.services.event_service import EventService
+from app.services.notification_service import AsyncRateLimiter
 
 logger = get_logger(__name__)
 
@@ -28,10 +30,12 @@ class EventViewService:
         session_factory: async_sessionmaker[AsyncSession],
         bot: Bot,
         settings: Settings,
+        rate_limiter: AsyncRateLimiter | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.bot = bot
         self.settings = settings
+        self.rate_limiter = rate_limiter or AsyncRateLimiter(settings.notification_rate_per_second)
 
     async def register_creator_message(
         self,
@@ -64,7 +68,11 @@ class EventViewService:
             message_id=message_id,
         )
 
-    async def refresh_event_messages(self, event_id: UUID) -> None:
+    async def refresh_event_messages(
+        self,
+        event_id: UUID,
+        exclude_user_id: UUID | None = None,
+    ) -> None:
         try:
             async with self.session_factory() as session:
                 event = await EventRepository(session).get(event_id)
@@ -89,10 +97,12 @@ class EventViewService:
 
         is_active = details.event.status == EventStatus.ACTIVE
         text = event_details_text(details)
-        refreshed = 0
-        failed = 0
-
-        if event.creator_chat_id is not None and event.creator_message_id is not None:
+        edits: list[tuple[int, int, object]] = []
+        if (
+            event.creator_chat_id is not None
+            and event.creator_message_id is not None
+            and event.creator_id != exclude_user_id
+        ):
             keyboard = event_details_keyboard(
                 event_id=event_id,
                 party_id=details.event.party_id,
@@ -101,42 +111,46 @@ class EventViewService:
                 can_respond=False,
                 can_start=is_active,
                 can_cancel=is_active,
+                poll=details.poll,
             )
-            if await self._edit_message(
-                event_id=event_id,
-                chat_id=event.creator_chat_id,
-                message_id=event.creator_message_id,
-                text=text,
-                keyboard=keyboard,
-            ):
-                refreshed += 1
-            else:
-                failed += 1
+            edits.append((event.creator_chat_id, event.creator_message_id, keyboard))
 
         for target in targets:
+            if target.user_id == exclude_user_id:
+                continue
             keyboard = self._recipient_keyboard(
                 event_id=event_id,
                 party_id=details.event.party_id,
                 target=target,
                 is_active=is_active,
+                poll=details.poll,
             )
-            if await self._edit_message(
-                event_id=event_id,
-                chat_id=target.telegram_user_id,
-                message_id=target.message_id,
-                text=text,
-                keyboard=keyboard,
-            ):
-                refreshed += 1
-            else:
-                failed += 1
+            edits.append((target.telegram_user_id, target.message_id, keyboard))
+
+        semaphore = asyncio.Semaphore(self.settings.invitation_refresh_concurrency)
+
+        async def edit(target: tuple[int, int, object]) -> bool:
+            chat_id, message_id, keyboard = target
+            async with semaphore:
+                return await self._edit_message(
+                    event_id=event_id,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=text,
+                    keyboard=keyboard,
+                )
+
+        results = await asyncio.gather(*(edit(target) for target in edits))
+        refreshed = sum(results)
+        failed = len(results) - refreshed
 
         logger.info(
             "event_views_refreshed",
             event_id=str(event_id),
-            targets=len(targets) + int(event.creator_chat_id is not None),
+            targets=len(edits),
             refreshed=refreshed,
             failed=failed,
+            excluded_user_id=str(exclude_user_id) if exclude_user_id else None,
             going_count=details.stats.going_count,
             later_count=details.stats.later_count,
             declined_count=details.stats.declined_count,
@@ -149,7 +163,18 @@ class EventViewService:
         party_id: UUID,
         target: NotificationMessageTarget,
         is_active: bool,
+        poll,
     ):
+        recipient_poll = None
+        if poll is not None:
+            recipient_poll = replace(
+                poll,
+                selected_option_id=target.poll_option_id,
+                options=[
+                    replace(option, selected=option.id == target.poll_option_id)
+                    for option in poll.options
+                ],
+            )
         return event_details_keyboard(
             event_id=event_id,
             party_id=party_id,
@@ -158,6 +183,7 @@ class EventViewService:
             can_respond=True,
             can_start=False,
             can_cancel=is_active and target.role in {PartyRole.OWNER, PartyRole.ADMIN},
+            poll=recipient_poll,
         )
 
     async def _edit_message(
@@ -170,6 +196,7 @@ class EventViewService:
         keyboard,
     ) -> bool:
         try:
+            await self.rate_limiter.acquire()
             await self.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
@@ -190,6 +217,7 @@ class EventViewService:
         except TelegramRetryAfter as exc:
             await asyncio.sleep(max(0, exc.retry_after))
             try:
+                await self.rate_limiter.acquire()
                 await self.bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,

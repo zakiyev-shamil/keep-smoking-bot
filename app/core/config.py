@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     custom_cooldown_minutes: int = Field(default=0, ge=0)
 
     notification_concurrency: int = Field(default=10, ge=1, le=50)
+    invitation_refresh_concurrency: int = Field(default=5, ge=1, le=10)
     notification_rate_per_second: int = Field(default=25, ge=1, le=30)
     notify_on_event_started: bool = True
     notify_on_event_cancelled: bool = True

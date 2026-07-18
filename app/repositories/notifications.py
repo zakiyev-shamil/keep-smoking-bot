@@ -18,6 +18,7 @@ from app.core.enums import (
 )
 from app.core.time import utc_now
 from app.models.event import Event
+from app.models.event_poll_vote import EventPollVote
 from app.models.event_response import EventResponse
 from app.models.notification import Notification
 from app.models.notification_settings import UserNotificationSettings
@@ -39,6 +40,7 @@ class NotificationMessageTarget:
     telegram_user_id: int
     message_id: int
     response: ResponseType | None
+    poll_option_id: UUID | None
     role: PartyRole
 
 
@@ -244,6 +246,7 @@ class NotificationRepository:
                     User.telegram_user_id,
                     Notification.telegram_message_id,
                     EventResponse.response,
+                    EventPollVote.option_id,
                     PartyMember.role,
                 )
                 .join(
@@ -261,6 +264,10 @@ class NotificationRepository:
                     EventResponse,
                     (EventResponse.event_id == event_id) & (EventResponse.user_id == User.id),
                 )
+                .outerjoin(
+                    EventPollVote,
+                    (EventPollVote.event_id == event_id) & (EventPollVote.user_id == User.id),
+                )
                 .where(
                     Notification.status == NotificationStatus.SENT,
                     Notification.telegram_message_id.is_not(None),
@@ -274,8 +281,9 @@ class NotificationRepository:
                 telegram_user_id=telegram_user_id,
                 message_id=message_id,
                 response=response,
+                poll_option_id=poll_option_id,
                 role=role,
             )
-            for user_id, telegram_user_id, message_id, response, role in rows
+            for user_id, telegram_user_id, message_id, response, poll_option_id, role in rows
             if message_id is not None
         ]

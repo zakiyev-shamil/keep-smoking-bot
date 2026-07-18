@@ -22,7 +22,7 @@ from app.bot.texts.ru import (
     event_cancelled_notification,
     event_details_text,
     event_started_notification,
-    participant_joined_notification,
+    response_changed_notification,
 )
 from app.core.config import Settings
 from app.core.enums import EventStatus, NotificationStatus, ResponseType
@@ -34,7 +34,7 @@ from app.models.user import User
 from app.repositories.events import EventRepository
 from app.repositories.notifications import EVENT_SETTING_COLUMNS, NotificationRepository
 from app.repositories.responses import EventResponseRepository
-from app.services.dto import NotificationBatchResult
+from app.services.dto import EventPoll, NotificationBatchResult
 from app.services.event_service import EventService
 
 logger = get_logger(__name__)
@@ -62,11 +62,12 @@ class NotificationService:
         session_factory: async_sessionmaker[AsyncSession],
         bot: Bot,
         settings: Settings,
+        rate_limiter: AsyncRateLimiter | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.bot = bot
         self.settings = settings
-        self.rate_limiter = AsyncRateLimiter(settings.notification_rate_per_second)
+        self.rate_limiter = rate_limiter or AsyncRateLimiter(settings.notification_rate_per_second)
 
     @staticmethod
     def _is_quiet(notification_settings: UserNotificationSettings | None, now: datetime) -> bool:
@@ -222,7 +223,12 @@ class NotificationService:
         counters = {"sent": 0, "failed": 0, "blocked": 0}
 
         async def send(user: User) -> None:
-            status, message_id, error_code = await self._send_invitation(user, event, invitation)
+            status, message_id, error_code = await self._send_invitation(
+                user,
+                event,
+                invitation,
+                details.poll,
+            )
             counters[status.value] += 1
             await self._mark_delivery(
                 event_id=event.id,
@@ -257,14 +263,18 @@ class NotificationService:
         return result
 
     async def _send_invitation(
-        self, user: User, event: Event, text: str
+        self,
+        user: User,
+        event: Event,
+        text: str,
+        poll: EventPoll | None,
     ) -> tuple[NotificationStatus, int | None, str | None]:
         try:
             await self.rate_limiter.acquire()
             message = await self.bot.send_message(
                 user.telegram_user_id,
                 text,
-                reply_markup=event_response_keyboard(event.id),
+                reply_markup=event_response_keyboard(event.id, poll=poll),
             )
             return NotificationStatus.SENT, message.message_id, None
         except TelegramRetryAfter as exc:
@@ -274,7 +284,7 @@ class NotificationService:
                 message = await self.bot.send_message(
                     user.telegram_user_id,
                     text,
-                    reply_markup=event_response_keyboard(event.id),
+                    reply_markup=event_response_keyboard(event.id, poll=poll),
                 )
                 return NotificationStatus.SENT, message.message_id, None
             except TelegramForbiddenError:
@@ -334,41 +344,69 @@ class NotificationService:
             settings_field="event_cancelled_enabled",
         )
 
-    async def notify_participant_joined(
+    async def notify_response_changed(
         self,
         event_id: UUID,
-        joined_user_id: UUID,
+        actor_id: UUID,
+        previous_response: ResponseType | None,
+        current_response: ResponseType,
     ) -> NotificationBatchResult:
+        if previous_response == current_response or (
+            previous_response is None and current_response == ResponseType.DECLINED
+        ):
+            return NotificationBatchResult(total=0, sent=0, failed=0, blocked=0)
         async with self.session_factory() as session:
             event = await EventRepository(session).get(event_id, with_relations=True)
-            joined_user = await session.get(User, joined_user_id)
+            actor = await session.get(User, actor_id)
             if (
                 event is None
-                or joined_user is None
+                or actor is None
                 or event.status != EventStatus.ACTIVE
                 or ensure_utc(event.expires_at) <= utc_now()
             ):
                 return NotificationBatchResult(total=0, sent=0, failed=0, blocked=0)
             responses = EventResponseRepository(session)
-            going_ids = await responses.going_user_ids(event_id)
-            rows = await NotificationRepository(session).users_by_ids(going_ids)
-            users, reasons = self._filter_recipients(
-                rows=rows,
-                creator_id=joined_user_id,
-                event_type=event.type,
-                now=utc_now(),
-            )
-            counts = await responses.counts(event.id, event.party_id)
-            text = participant_joined_notification(
-                event,
-                joined_user,
-                counts.get(ResponseType.GOING, 0),
-            )
+            recipient_ids = set(await responses.interested_user_ids(event_id))
+            recipient_ids.add(event.creator_id)
+            actor_was_candidate = actor_id in recipient_ids
+            recipient_ids.discard(actor_id)
+            rows = await NotificationRepository(session).users_by_ids(list(recipient_ids))
+            now = utc_now()
+            event_setting = EVENT_SETTING_COLUMNS[event.type].key
+            users: list[User] = []
+            reasons = {
+                "candidates": len(rows),
+                "actor_excluded": int(actor_was_candidate),
+                "global_disabled_excluded": 0,
+                "event_type_disabled_excluded": 0,
+                "quiet_hours_excluded": 0,
+                "eligible": 0,
+            }
+            for user, notification_settings in rows:
+                if (
+                    notification_settings is not None
+                    and not notification_settings.notifications_enabled
+                ):
+                    reasons["global_disabled_excluded"] += 1
+                elif (
+                    user.id != event.creator_id
+                    and notification_settings is not None
+                    and not getattr(notification_settings, event_setting)
+                ):
+                    reasons["event_type_disabled_excluded"] += 1
+                elif self._is_quiet(notification_settings, now):
+                    reasons["quiet_hours_excluded"] += 1
+                else:
+                    users.append(user)
+                    reasons["eligible"] += 1
+            text = response_changed_notification(actor, current_response)
             keyboard = event_summary_keyboard(event.id, event.party_id)
             logger.info(
-                "participant_joined_notification_resolved",
+                "response_changed_notification_resolved",
                 event_id=str(event.id),
-                joined_user_id=str(joined_user_id),
+                actor_id=str(actor_id),
+                previous_response=previous_response.value if previous_response else None,
+                current_response=current_response.value,
                 **reasons,
             )
 
@@ -378,7 +416,7 @@ class NotificationService:
             text=text,
             reply_markup=keyboard,
             disable_notification=True,
-            notification_kind="participant_joined",
+            notification_kind="response_changed",
         )
 
     async def _notify_interested(

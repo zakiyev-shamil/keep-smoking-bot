@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from uuid import UUID
 
 from app.core.enums import EventType, ResponseType
 from app.models.event import Event
@@ -20,14 +21,41 @@ class EventStats:
     declined_users: list[User] = field(default_factory=list)
 
 
+@dataclass(slots=True, frozen=True)
+class EventPollOptionDetails:
+    id: UUID
+    text: str
+    position: int
+    vote_count: int
+    selected: bool
+
+
+@dataclass(slots=True, frozen=True)
+class EventPoll:
+    options: list[EventPollOptionDetails]
+    selected_option_id: UUID | None
+    read_only: bool
+
+
 @dataclass(slots=True)
 class EventDetails:
     event: Event
     requester_membership: PartyMember
     requester_response: ResponseType | None
     stats: EventStats
+    poll: EventPoll | None = None
     response_changed: bool = False
-    became_going: bool = False
+    poll_changed: bool = False
+    previous_response: ResponseType | None = None
+    current_response: ResponseType | None = None
+
+    @property
+    def became_going(self) -> bool:
+        return (
+            self.response_changed
+            and self.current_response == ResponseType.GOING
+            and self.previous_response != ResponseType.GOING
+        )
 
 
 @dataclass(slots=True)

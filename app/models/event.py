@@ -12,6 +12,7 @@ from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 from app.models._types import enum_type
 
 if TYPE_CHECKING:
+    from app.models.event_poll_option import EventPollOption
     from app.models.event_response import EventResponse
     from app.models.party import Party
     from app.models.user import User
@@ -54,4 +55,9 @@ class Event(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     creator: Mapped[User] = relationship(foreign_keys=[creator_id])
     responses: Mapped[list[EventResponse]] = relationship(
         back_populates="event", cascade="all, delete-orphan"
+    )
+    poll_options: Mapped[list[EventPollOption]] = relationship(
+        back_populates="event",
+        cascade="all, delete-orphan",
+        order_by="EventPollOption.position",
     )

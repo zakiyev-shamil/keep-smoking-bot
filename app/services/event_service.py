@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Sequence
 from datetime import timedelta
 from uuid import UUID
 
@@ -24,6 +25,8 @@ from app.core.exceptions import (
     EventNotActiveError,
     EventNotFoundError,
     InvalidEventTitleError,
+    InvalidPollOptionError,
+    InvalidPollOptionsError,
     NotPartyMemberError,
     PartyNotFoundError,
     PermissionDeniedError,
@@ -33,8 +36,16 @@ from app.models.event import Event
 from app.models.party_member import PartyMember
 from app.repositories.events import EventRepository
 from app.repositories.parties import PartyRepository
+from app.repositories.polls import EventPollRepository
 from app.repositories.responses import EventResponseRepository
-from app.services.dto import EventDetails, EventStats, EventTransition
+from app.services.dto import (
+    EventDetails,
+    EventPoll,
+    EventPollOptionDetails,
+    EventStats,
+    EventTransition,
+)
+from app.services.poll_options import parse_poll_options, validate_poll_options
 
 logger = get_logger(__name__)
 WHITESPACE_RE = re.compile(r"\s+")
@@ -46,6 +57,7 @@ class EventService:
         self.settings = settings
         self.events = EventRepository(session)
         self.parties = PartyRepository(session)
+        self.polls = EventPollRepository(session)
         self.responses = EventResponseRepository(session)
 
     @staticmethod
@@ -55,6 +67,8 @@ class EventService:
             raise InvalidEventTitleError
         return normalized
 
+    parse_poll_options = staticmethod(parse_poll_options)
+
     async def create_event(
         self,
         party_id: UUID,
@@ -62,6 +76,7 @@ class EventService:
         event_type: EventType,
         title: str | None = None,
         text: str | None = None,
+        poll_options: Sequence[str] | None = None,
     ) -> Event:
         event_title = (
             self.normalize_title(title)
@@ -70,6 +85,11 @@ class EventService:
         )
         if event_type == EventType.CUSTOM and title is None:
             raise InvalidEventTitleError
+        normalized_poll_options: list[str] | None = None
+        if poll_options is not None:
+            if event_type != EventType.LUNCH:
+                raise InvalidPollOptionsError("Опрос доступен только для обеда.")
+            normalized_poll_options = validate_poll_options(poll_options)
         now = utc_now()
         try:
             async with self.session.begin():
@@ -97,6 +117,8 @@ class EventService:
                     expires_at=now + timedelta(minutes=self.settings.event_ttl_minutes(event_type)),
                 )
                 await self.session.flush()
+                if normalized_poll_options is not None:
+                    await self.polls.create_options(event.id, normalized_poll_options)
                 await self.responses.upsert(
                     event_id=event.id,
                     user_id=creator_id,
@@ -145,7 +167,7 @@ class EventService:
         now = utc_now()
         expired = False
         response_changed = False
-        became_going = False
+        previous_response: ResponseType | None = None
         async with self.session.begin():
             event = await self.events.get(event_id, for_update=True)
             if event is None:
@@ -164,13 +186,14 @@ class EventService:
                 previous = await self.responses.get_user_response(event_id, user_id)
                 previous_response = previous.response if previous is not None else None
                 response_changed = previous_response != response
-                became_going = response_changed and response == ResponseType.GOING
                 if response_changed:
                     await self.responses.upsert(
                         event_id=event_id,
                         user_id=user_id,
                         response=response,
                     )
+                    if response == ResponseType.DECLINED:
+                        await self.polls.clear_vote(event_id, user_id)
         if expired:
             raise EventExpiredError
         if response_changed:
@@ -182,7 +205,68 @@ class EventService:
             )
         details = await self.get_event_details(event_id, user_id)
         details.response_changed = response_changed
-        details.became_going = became_going
+        details.previous_response = previous_response
+        details.current_response = response
+        return details
+
+    async def vote_poll(
+        self,
+        event_id: UUID,
+        user_id: UUID,
+        option_id: UUID | None,
+    ) -> EventDetails:
+        now = utc_now()
+        expired = False
+        response_changed = False
+        poll_changed = False
+        previous_response: ResponseType | None = None
+        async with self.session.begin():
+            event = await self.events.get(event_id, for_update=True)
+            if event is None:
+                raise EventNotFoundError
+            await self._active_membership(event.party_id, user_id)
+            if event.status == EventStatus.ACTIVE and ensure_utc(event.expires_at) <= now:
+                event.status = EventStatus.EXPIRED
+                expired = True
+            elif event.status != EventStatus.ACTIVE:
+                if event.status == EventStatus.EXPIRED:
+                    raise EventExpiredError
+                raise EventNotActiveError
+            else:
+                poll_options = await self.polls.options_with_counts(event_id)
+                if not poll_options:
+                    raise InvalidPollOptionError
+                if option_id is not None and await self.polls.option(event_id, option_id) is None:
+                    raise InvalidPollOptionError
+                previous_option_id = await self.polls.selected_option_id(event_id, user_id)
+                poll_changed = previous_option_id != option_id
+                previous = await self.responses.get_user_response(event_id, user_id)
+                previous_response = previous.response if previous is not None else None
+                response_changed = previous_response != ResponseType.GOING
+                if response_changed:
+                    await self.responses.upsert(
+                        event_id=event_id,
+                        user_id=user_id,
+                        response=ResponseType.GOING,
+                    )
+                if option_id is None:
+                    await self.polls.clear_vote(event_id, user_id)
+                else:
+                    await self.polls.upsert_vote(event_id, user_id, option_id)
+        if expired:
+            raise EventExpiredError
+        logger.info(
+            "event_poll_vote_changed",
+            event_id=str(event_id),
+            user_id=str(user_id),
+            option_id=str(option_id) if option_id else None,
+            attendance_changed=response_changed,
+        )
+        details = await self.get_event_details(event_id, user_id)
+        details.response_changed = response_changed
+        details.poll_changed = poll_changed
+        details.previous_response = previous_response
+        details.current_response = ResponseType.GOING
         return details
 
     async def get_event_details(self, event_id: UUID, requester_id: UUID) -> EventDetails:
@@ -199,6 +283,26 @@ class EventService:
         member_count = await self.parties.count_members(event.party_id)
         response_count = sum(counts.values())
         own_response = await self.responses.get_user_response(event.id, requester_id)
+        poll_rows = (
+            await self.polls.options_with_counts(event.id) if event.type == EventType.LUNCH else []
+        )
+        poll = None
+        if poll_rows:
+            selected_option_id = await self.polls.selected_option_id(event.id, requester_id)
+            poll = EventPoll(
+                options=[
+                    EventPollOptionDetails(
+                        id=option.id,
+                        text=option.text,
+                        position=option.position,
+                        vote_count=count,
+                        selected=option.id == selected_option_id,
+                    )
+                    for option, count in poll_rows
+                ],
+                selected_option_id=selected_option_id,
+                read_only=event.status != EventStatus.ACTIVE,
+            )
         details = EventDetails(
             event=event,
             requester_membership=membership,
@@ -212,6 +316,7 @@ class EventService:
                 later_users=users[ResponseType.LATER],
                 declined_users=users[ResponseType.DECLINED],
             ),
+            poll=poll,
         )
         await self.session.commit()
         return details
