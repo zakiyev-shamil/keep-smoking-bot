@@ -13,7 +13,7 @@ def display_name(user: User) -> str:
 
 WELCOME_NO_PARTY = (
     "Привет.\n\n"
-    "Этот бот помогает быстро собрать коллег на перекур, обед или другой движ.\n\n"
+    "Этот бот помогает быстро собрать коллег на перекур, обед или своё событие.\n\n"
     "Ты пока не состоишь ни в одной Party."
 )
 CREATE_PARTY_NAME = "Введите название Party."
@@ -21,7 +21,7 @@ INVALID_PARTY_NAME = "Название должно содержать от 1 д
 INVALID_INVITATION = "Приглашение недействительно или устарело."
 GENERIC_ERROR = "Что-то пошло не так. Попробуйте ещё раз."
 HELP = (
-    "Office Party помогает позвать коллег на перекур, обед или другой движ.\n\n"
+    "Office Party помогает позвать коллег на перекур, обед или своё событие.\n\n"
     "Используйте /menu, а дальше — кнопки. Приглашение в Party открывается по ссылке."
 )
 
@@ -51,20 +51,20 @@ def custom_event_confirmation(title: str, party_name: str, recipients: int) -> s
     return f"🎮 {title}\n\nПозвать {party_name}?\n\nПолучат уведомление: {recipients} человек."
 
 
-def event_invitation_text(event: Event) -> str:
-    return (
-        f"{event.type.emoji} {event.title}?\n\n"
-        f"{display_name(event.creator)} зовёт {event.party.name}.\n\n"
-        "Создано только что."
-    )
-
-
 def event_started_notification(event: Event) -> str:
     return f"{event.type.emoji} Выходим!\n\n{event.party.name} уже собирается."
 
 
 def event_cancelled_notification(event: Event) -> str:
     return f"{event.type.emoji} Событие «{event.title}» отменено."
+
+
+def participant_joined_notification(event: Event, user: User, going_count: int) -> str:
+    return (
+        f"👋 {display_name(user)} теперь идёт\n\n"
+        f"{event.type.emoji} {event.title} · {event.party.name}\n"
+        f"✅ Всего идут — {going_count}"
+    )
 
 
 def event_details_text(details: EventDetails) -> str:
@@ -85,8 +85,7 @@ def event_details_text(details: EventDetails) -> str:
         f"Статус: {status}\n\n"
         f"✅ Идут — {stats.going_count}\n"
         f"⏱ Через 5 минут — {stats.later_count}\n"
-        f"❌ Пас — {stats.declined_count}\n"
-        f"❔ Не ответили — {stats.no_response_count}\n\n"
+        f"❌ Пас — {stats.declined_count}\n\n"
         f"Идут:\n{going_names}"
     )
 
@@ -117,7 +116,7 @@ def user_party_stats_text(stats: UserPartyStats) -> str:
         f"📊 Твоя статистика · {stats.party.name}\n\n"
         f"🚬 Выходил курить — {by_type.get(EventType.SMOKE, 0)}\n"
         f"🍔 Ходил обедать — {by_type.get(EventType.LUNCH, 0)}\n"
-        f"🎮 Другие активности — {by_type.get(EventType.CUSTOM, 0)}\n\n"
+        f"🎮 Свои события — {by_type.get(EventType.CUSTOM, 0)}\n\n"
         f"📣 Организовал активностей — {stats.created_count}\n\n"
         "Считаются события, где нажали «Выходим», "
         "а твой ответ был «Иду» или «Через 5 минут»."

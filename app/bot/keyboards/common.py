@@ -41,3 +41,16 @@ def cancel_fsm_keyboard() -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🏠 В меню",
+                    callback_data=MenuCallback(action="menu").pack(),
+                )
+            ]
+        ]
+    )

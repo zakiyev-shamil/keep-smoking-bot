@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from app.core.enums import EventType
+from app.core.enums import EventType, ResponseType
 from app.services.event_service import EventService
 from app.services.notification_service import NotificationService
 from tests.helpers import make_settings, party_with_members
@@ -44,3 +44,39 @@ async def test_broadcast_claim_prevents_duplicate_delivery(
     assert first.sent == 2
     assert second.total == 0
     assert bot.send_message.await_count == 2
+
+
+async def test_new_going_participant_silently_notifies_previous_going_users(
+    session,
+    session_factory,
+):
+    party, users = await party_with_members(session, members=4)
+    events = EventService(session, make_settings())
+    event = await events.create_event(
+        party.id,
+        users[0].id,
+        EventType.SMOKE,
+    )
+    await events.respond(event.id, users[2].id, ResponseType.GOING)
+    await events.respond(event.id, users[3].id, ResponseType.LATER)
+    joined = await events.respond(event.id, users[1].id, ResponseType.GOING)
+    bot = AsyncMock()
+    bot.send_message.return_value = SimpleNamespace(message_id=123)
+    service = NotificationService(session_factory, bot, make_settings())
+
+    result = await service.notify_participant_joined(event.id, users[1].id)
+
+    assert joined.became_going is True
+    assert result.total == 2
+    assert result.sent == 2
+    recipients = {call.args[0] for call in bot.send_message.await_args_list}
+    assert recipients == {
+        users[0].telegram_user_id,
+        users[2].telegram_user_id,
+    }
+    for call in bot.send_message.await_args_list:
+        assert call.kwargs["disable_notification"] is True
+        labels = [
+            button.text for row in call.kwargs["reply_markup"].inline_keyboard for button in row
+        ]
+        assert labels == ["👀 Открыть событие", "⬅️ В Party"]

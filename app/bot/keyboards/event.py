@@ -109,15 +109,6 @@ def event_details_keyboard(
                 text=label,
                 callback_data=EventActionCallback(action=response.value, event_id=event_id),
             )
-        builder.button(
-            text="🔄 Обновить",
-            callback_data=EventActionCallback(action="view", event_id=event_id),
-        )
-    elif is_active:
-        builder.button(
-            text="🔄 Обновить",
-            callback_data=EventActionCallback(action="view", event_id=event_id),
-        )
     if is_active:
         if can_start:
             builder.button(
@@ -139,6 +130,25 @@ def event_details_keyboard(
     )
     builder.adjust(3, 1, 1, 1, 1)
     return builder.as_markup()
+
+
+def event_summary_keyboard(event_id: UUID, party_id: UUID) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="👀 Открыть событие",
+                    callback_data=EventActionCallback(action="view", event_id=event_id).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ В Party",
+                    callback_data=PartyCallback(action="open", party_id=party_id).pack(),
+                )
+            ],
+        ]
+    )
 
 
 def duplicate_event_keyboard(event_id: UUID) -> InlineKeyboardMarkup:

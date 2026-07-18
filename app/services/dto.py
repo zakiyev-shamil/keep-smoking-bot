@@ -26,6 +26,8 @@ class EventDetails:
     requester_membership: PartyMember
     requester_response: ResponseType | None
     stats: EventStats
+    response_changed: bool = False
+    became_going: bool = False
 
 
 @dataclass(slots=True)

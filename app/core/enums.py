@@ -36,7 +36,7 @@ class EventType(StrEnum):
             self.COFFEE: "Го кофе",
             self.LUNCH: "Го обедать",
             self.AFTER_WORK: "После работы",
-            self.CUSTOM: "Другой движ",
+            self.CUSTOM: "Своё событие",
         }[self]
 
 

@@ -57,7 +57,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         bot=bot,
         dispatcher=dispatcher,
         container=container,
-        notification_worker=InlineNotificationWorker(container.notifications),
+        notification_worker=InlineNotificationWorker(
+            container.notifications,
+            container.event_views,
+        ),
     )
     app.state.runtime = runtime
     try:

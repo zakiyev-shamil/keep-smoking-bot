@@ -12,7 +12,7 @@ from app.bot.callbacks.event import (
     EventConfirmCallback,
     EventCreateCallback,
 )
-from app.bot.keyboards.common import cancel_fsm_keyboard
+from app.bot.keyboards.common import cancel_fsm_keyboard, menu_keyboard
 from app.bot.keyboards.event import (
     cancel_event_keyboard,
     custom_confirmation_keyboard,
@@ -118,7 +118,7 @@ async def preview_event(
         if callback.message:
             await edit_or_answer(
                 callback.message,
-                "Что предлагаешь?\n\nНазвание — от 1 до 100 символов.",
+                "Что за событие?\n\nНазвание — от 1 до 100 символов.",
                 cancel_fsm_keyboard(),
             )
         return
@@ -155,7 +155,10 @@ async def custom_event_title(
     party_id = data.get("party_id")
     if not party_id:
         await state.clear()
-        await message.answer("Сценарий устарел. Открой меню и попробуй ещё раз.")
+        await message.answer(
+            "Сценарий устарел. Открой меню и попробуй ещё раз.",
+            reply_markup=menu_keyboard(),
+        )
         return
     from uuid import UUID
 
@@ -188,7 +191,7 @@ async def custom_event_action(
         if callback.message:
             await edit_or_answer(
                 callback.message,
-                "Что предлагаешь?\n\nНазвание — от 1 до 100 символов.",
+                "Что за событие?\n\nНазвание — от 1 до 100 символов.",
                 cancel_fsm_keyboard(),
             )
         return
@@ -198,7 +201,10 @@ async def custom_event_action(
     if not title or not party_id or str(callback_data.party_id) != party_id:
         await state.clear()
         if callback.message:
-            await callback.message.answer("Сценарий устарел. Попробуй ещё раз.")
+            await callback.message.answer(
+                "Сценарий устарел. Попробуй ещё раз.",
+                reply_markup=menu_keyboard(),
+            )
         return
     try:
         event = await services.events.create_event(
@@ -245,7 +251,8 @@ async def confirm_event(
         minutes = max(1, math.ceil(exc.retry_after_seconds / 60))
         if callback.message:
             await callback.message.answer(
-                f"Следующее такое событие можно создать через {minutes} мин."
+                f"Следующее такое событие можно создать через {minutes} мин.",
+                reply_markup=menu_keyboard(),
             )
         return
     await notification_worker.enqueue(NotificationJobType.EVENT_CREATED, event.id)
@@ -273,8 +280,17 @@ async def event_action(
             ResponseType(action),
         )
         await show_event(callback.message, details, current_user, container)
-        if details.event.creator_id != current_user.id:
-            await container.event_views.refresh_creator_message(details.event.id)
+        if details.response_changed:
+            await notification_worker.enqueue(
+                NotificationJobType.EVENT_REFRESH,
+                details.event.id,
+            )
+        if details.became_going:
+            await notification_worker.enqueue(
+                NotificationJobType.PARTICIPANT_JOINED,
+                details.event.id,
+                current_user.id,
+            )
         return
     if action == "view":
         details = await services.events.get_event_details(callback_data.event_id, current_user.id)
@@ -285,6 +301,9 @@ async def event_action(
         if transition.changed:
             await notification_worker.enqueue(
                 NotificationJobType.EVENT_STARTED, transition.event.id
+            )
+            await notification_worker.enqueue(
+                NotificationJobType.EVENT_REFRESH, transition.event.id
             )
         details = await services.events.get_event_details(transition.event.id, current_user.id)
         await show_event(callback.message, details, current_user, container)
@@ -301,6 +320,9 @@ async def event_action(
         if transition.changed:
             await notification_worker.enqueue(
                 NotificationJobType.EVENT_CANCELLED, transition.event.id
+            )
+            await notification_worker.enqueue(
+                NotificationJobType.EVENT_REFRESH, transition.event.id
             )
         details = await services.events.get_event_details(transition.event.id, current_user.id)
         await show_event(callback.message, details, current_user, container)

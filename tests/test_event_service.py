@@ -77,6 +77,23 @@ async def test_response_is_updated_not_duplicated(session):
     assert details.stats.going_count == 2
 
 
+async def test_response_reports_only_real_transition_to_going(session):
+    party, users = await party_with_members(session)
+    service = EventService(session, make_settings())
+    event = await service.create_event(party.id, users[0].id, EventType.SMOKE)
+
+    later = await service.respond(event.id, users[1].id, ResponseType.LATER)
+    going = await service.respond(event.id, users[1].id, ResponseType.GOING)
+    repeated = await service.respond(event.id, users[1].id, ResponseType.GOING)
+
+    assert later.response_changed is True
+    assert later.became_going is False
+    assert going.response_changed is True
+    assert going.became_going is True
+    assert repeated.response_changed is False
+    assert repeated.became_going is False
+
+
 async def test_creator_cannot_decline_own_event(session):
     party, users = await party_with_members(session)
     service = EventService(session, make_settings())

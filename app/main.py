@@ -36,7 +36,7 @@ async def run() -> None:
         session_factory=session_factory,
         bot=bot,
     )
-    notification_worker = NotificationWorker(container.notifications)
+    notification_worker = NotificationWorker(container.notifications, container.event_views)
     notification_worker.start()
     expiration_stop = asyncio.Event()
     expiration_task = asyncio.create_task(

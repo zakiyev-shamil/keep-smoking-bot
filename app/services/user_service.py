@@ -20,6 +20,12 @@ SETTING_FIELDS = {
     EventType.AFTER_WORK: "after_work_enabled",
     EventType.CUSTOM: "custom_enabled",
 }
+ALL_EVENT_SETTING_FIELDS = tuple(SETTING_FIELDS.values())
+VISIBLE_EVENT_SETTING_FIELDS = (
+    SETTING_FIELDS[EventType.SMOKE],
+    SETTING_FIELDS[EventType.LUNCH],
+    SETTING_FIELDS[EventType.CUSTOM],
+)
 
 
 class UserService:
@@ -85,12 +91,23 @@ class UserService:
     ) -> UserNotificationSettings:
         settings = await self.get_settings(user_id)
         field = SETTING_FIELDS[event_type]
-        setattr(settings, field, not getattr(settings, field))
+        if not settings.notifications_enabled:
+            for setting_field in ALL_EVENT_SETTING_FIELDS:
+                setattr(settings, setting_field, False)
+            setattr(settings, field, True)
+        else:
+            setattr(settings, field, not getattr(settings, field))
+        settings.notifications_enabled = any(
+            getattr(settings, setting_field) for setting_field in VISIBLE_EVENT_SETTING_FIELDS
+        )
         await self.session.commit()
         return settings
 
     async def toggle_all_notifications(self, user_id) -> UserNotificationSettings:
         settings = await self.get_settings(user_id)
-        settings.notifications_enabled = not settings.notifications_enabled
+        target = not settings.notifications_enabled
+        settings.notifications_enabled = target
+        for field in ALL_EVENT_SETTING_FIELDS:
+            setattr(settings, field, target)
         await self.session.commit()
         return settings

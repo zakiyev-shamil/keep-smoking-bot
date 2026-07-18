@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -9,8 +10,15 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.enums import EventType, NotificationStatus
+from app.core.enums import (
+    EventType,
+    NotificationStatus,
+    PartyRole,
+    ResponseType,
+)
 from app.core.time import utc_now
+from app.models.event import Event
+from app.models.event_response import EventResponse
 from app.models.notification import Notification
 from app.models.notification_settings import UserNotificationSettings
 from app.models.party_member import PartyMember
@@ -23,6 +31,15 @@ EVENT_SETTING_COLUMNS = {
     EventType.AFTER_WORK: UserNotificationSettings.after_work_enabled,
     EventType.CUSTOM: UserNotificationSettings.custom_enabled,
 }
+
+
+@dataclass(slots=True, frozen=True)
+class NotificationMessageTarget:
+    user_id: UUID
+    telegram_user_id: int
+    message_id: int
+    response: ResponseType | None
+    role: PartyRole
 
 
 class NotificationRepository:
@@ -218,3 +235,47 @@ class NotificationRepository:
                 updated_at=func.now(),
             )
         )
+
+    async def sent_message_targets(self, event_id: UUID) -> list[NotificationMessageTarget]:
+        rows = (
+            await self.session.execute(
+                select(
+                    User.id,
+                    User.telegram_user_id,
+                    Notification.telegram_message_id,
+                    EventResponse.response,
+                    PartyMember.role,
+                )
+                .join(
+                    Notification,
+                    (Notification.recipient_id == User.id) & (Notification.event_id == event_id),
+                )
+                .join(Event, Event.id == Notification.event_id)
+                .join(
+                    PartyMember,
+                    (PartyMember.user_id == User.id)
+                    & (PartyMember.party_id == Event.party_id)
+                    & PartyMember.is_active.is_(True),
+                )
+                .outerjoin(
+                    EventResponse,
+                    (EventResponse.event_id == event_id) & (EventResponse.user_id == User.id),
+                )
+                .where(
+                    Notification.status == NotificationStatus.SENT,
+                    Notification.telegram_message_id.is_not(None),
+                )
+                .order_by(User.id)
+            )
+        ).all()
+        return [
+            NotificationMessageTarget(
+                user_id=user_id,
+                telegram_user_id=telegram_user_id,
+                message_id=message_id,
+                response=response,
+                role=role,
+            )
+            for user_id, telegram_user_id, message_id, response, role in rows
+            if message_id is not None
+        ]

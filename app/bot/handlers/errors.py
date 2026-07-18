@@ -4,6 +4,7 @@ from aiogram import Router
 from aiogram.types import ErrorEvent
 from structlog.stdlib import get_logger
 
+from app.bot.keyboards.common import menu_keyboard
 from app.bot.texts.ru import DOMAIN_MESSAGES, GENERIC_ERROR
 from app.core.exceptions import CooldownActiveError, DomainError, EventAlreadyExistsError
 
@@ -48,7 +49,7 @@ async def global_error_handler(event: ErrorEvent) -> bool:
 
     if update.callback_query:
         if update.callback_query.message:
-            await update.callback_query.message.answer(text)
+            await update.callback_query.message.answer(text, reply_markup=menu_keyboard())
     elif update.message:
-        await update.message.answer(text)
+        await update.message.answer(text, reply_markup=menu_keyboard())
     return True

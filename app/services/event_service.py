@@ -144,6 +144,8 @@ class EventService:
     async def respond(self, event_id: UUID, user_id: UUID, response: ResponseType) -> EventDetails:
         now = utc_now()
         expired = False
+        response_changed = False
+        became_going = False
         async with self.session.begin():
             event = await self.events.get(event_id, for_update=True)
             if event is None:
@@ -159,20 +161,29 @@ class EventService:
             else:
                 if event.creator_id == user_id and response != ResponseType.GOING:
                     raise PermissionDeniedError
-                await self.responses.upsert(
-                    event_id=event_id,
-                    user_id=user_id,
-                    response=response,
-                )
+                previous = await self.responses.get_user_response(event_id, user_id)
+                previous_response = previous.response if previous is not None else None
+                response_changed = previous_response != response
+                became_going = response_changed and response == ResponseType.GOING
+                if response_changed:
+                    await self.responses.upsert(
+                        event_id=event_id,
+                        user_id=user_id,
+                        response=response,
+                    )
         if expired:
             raise EventExpiredError
-        logger.info(
-            "event_response_changed",
-            event_id=str(event_id),
-            user_id=str(user_id),
-            response=response.value,
-        )
-        return await self.get_event_details(event_id, user_id)
+        if response_changed:
+            logger.info(
+                "event_response_changed",
+                event_id=str(event_id),
+                user_id=str(user_id),
+                response=response.value,
+            )
+        details = await self.get_event_details(event_id, user_id)
+        details.response_changed = response_changed
+        details.became_going = became_going
+        return details
 
     async def get_event_details(self, event_id: UUID, requester_id: UUID) -> EventDetails:
         now = utc_now()

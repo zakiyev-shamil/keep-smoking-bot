@@ -17,14 +17,15 @@ from aiogram.exceptions import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.stdlib import get_logger
 
-from app.bot.keyboards.event import event_response_keyboard
+from app.bot.keyboards.event import event_response_keyboard, event_summary_keyboard
 from app.bot.texts.ru import (
     event_cancelled_notification,
-    event_invitation_text,
+    event_details_text,
     event_started_notification,
+    participant_joined_notification,
 )
 from app.core.config import Settings
-from app.core.enums import EventStatus, NotificationStatus
+from app.core.enums import EventStatus, NotificationStatus, ResponseType
 from app.core.exceptions import EventNotFoundError
 from app.core.time import ensure_utc, utc_now
 from app.models.event import Event
@@ -34,6 +35,7 @@ from app.repositories.events import EventRepository
 from app.repositories.notifications import EVENT_SETTING_COLUMNS, NotificationRepository
 from app.repositories.responses import EventResponseRepository
 from app.services.dto import NotificationBatchResult
+from app.services.event_service import EventService
 
 logger = get_logger(__name__)
 
@@ -211,7 +213,11 @@ class NotificationService:
             )
             await session.commit()
             users = [user for user in users if user.id in claimed_ids]
-            invitation = event_invitation_text(event)
+            details = await EventService(session, self.settings).get_event_details(
+                event.id,
+                event.creator_id,
+            )
+            invitation = event_details_text(details)
 
         counters = {"sent": 0, "failed": 0, "blocked": 0}
 
@@ -328,6 +334,53 @@ class NotificationService:
             settings_field="event_cancelled_enabled",
         )
 
+    async def notify_participant_joined(
+        self,
+        event_id: UUID,
+        joined_user_id: UUID,
+    ) -> NotificationBatchResult:
+        async with self.session_factory() as session:
+            event = await EventRepository(session).get(event_id, with_relations=True)
+            joined_user = await session.get(User, joined_user_id)
+            if (
+                event is None
+                or joined_user is None
+                or event.status != EventStatus.ACTIVE
+                or ensure_utc(event.expires_at) <= utc_now()
+            ):
+                return NotificationBatchResult(total=0, sent=0, failed=0, blocked=0)
+            responses = EventResponseRepository(session)
+            going_ids = await responses.going_user_ids(event_id)
+            rows = await NotificationRepository(session).users_by_ids(going_ids)
+            users, reasons = self._filter_recipients(
+                rows=rows,
+                creator_id=joined_user_id,
+                event_type=event.type,
+                now=utc_now(),
+            )
+            counts = await responses.counts(event.id, event.party_id)
+            text = participant_joined_notification(
+                event,
+                joined_user,
+                counts.get(ResponseType.GOING, 0),
+            )
+            keyboard = event_summary_keyboard(event.id, event.party_id)
+            logger.info(
+                "participant_joined_notification_resolved",
+                event_id=str(event.id),
+                joined_user_id=str(joined_user_id),
+                **reasons,
+            )
+
+        return await self._send_followup_batch(
+            event_id=event_id,
+            users=users,
+            text=text,
+            reply_markup=keyboard,
+            disable_notification=True,
+            notification_kind="participant_joined",
+        )
+
     async def _notify_interested(
         self,
         event_id: UUID,
@@ -356,13 +409,38 @@ class NotificationService:
                 and not self._is_quiet(notification_settings, now)
             ]
             text = text_factory(event)
+            keyboard = event_summary_keyboard(event.id, event.party_id)
 
+        return await self._send_followup_batch(
+            event_id=event_id,
+            users=users,
+            text=text,
+            reply_markup=keyboard,
+            disable_notification=False,
+            notification_kind=settings_field,
+        )
+
+    async def _send_followup_batch(
+        self,
+        *,
+        event_id: UUID,
+        users: list[User],
+        text: str,
+        reply_markup,
+        disable_notification: bool,
+        notification_kind: str,
+    ) -> NotificationBatchResult:
         counters = {"sent": 0, "failed": 0, "blocked": 0}
 
         async def send(user: User) -> None:
             try:
                 await self.rate_limiter.acquire()
-                await self.bot.send_message(user.telegram_user_id, text)
+                await self.bot.send_message(
+                    user.telegram_user_id,
+                    text,
+                    reply_markup=reply_markup,
+                    disable_notification=disable_notification,
+                )
                 counters["sent"] += 1
             except TelegramForbiddenError:
                 counters["blocked"] += 1
@@ -375,7 +453,12 @@ class NotificationService:
                 await asyncio.sleep(max(0, exc.retry_after))
                 try:
                     await self.rate_limiter.acquire()
-                    await self.bot.send_message(user.telegram_user_id, text)
+                    await self.bot.send_message(
+                        user.telegram_user_id,
+                        text,
+                        reply_markup=reply_markup,
+                        disable_notification=disable_notification,
+                    )
                     counters["sent"] += 1
                 except TelegramAPIError:
                     counters["failed"] += 1
@@ -392,7 +475,8 @@ class NotificationService:
         logger.info(
             "notification_followup_batch_completed",
             event_id=str(event_id),
-            notification_kind=settings_field,
+            notification_kind=notification_kind,
+            silent=disable_notification,
             total=result.total,
             sent=result.sent,
             failed=result.failed,

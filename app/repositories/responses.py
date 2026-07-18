@@ -113,3 +113,12 @@ class EventResponseRepository:
             )
         )
         return list(result)
+
+    async def going_user_ids(self, event_id: UUID) -> list[UUID]:
+        result = await self.session.scalars(
+            select(EventResponse.user_id).where(
+                EventResponse.event_id == event_id,
+                EventResponse.response == ResponseType.GOING,
+            )
+        )
+        return list(result)

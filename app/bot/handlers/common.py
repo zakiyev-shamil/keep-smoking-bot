@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app.bot.callbacks.common import MenuCallback
-from app.bot.keyboards.common import no_party_keyboard, party_selector_keyboard
+from app.bot.keyboards.common import menu_keyboard, no_party_keyboard, party_selector_keyboard
 from app.bot.keyboards.party import party_keyboard
 from app.bot.texts.ru import (
     HELP,
@@ -67,7 +67,7 @@ async def start(
         try:
             result = await services.parties.join_party(current_user.id, token)
         except InvalidInvitationError:
-            await message.answer(INVALID_INVITATION)
+            await message.answer(INVALID_INVITATION, reply_markup=menu_keyboard())
             return
         await message.answer(party_joined(result.party.name, result.joined))
         count = await services.parties.count_members(result.party.id)
@@ -89,7 +89,7 @@ async def menu_command(
 
 @router.message(Command("help"))
 async def help_command(message: Message) -> None:
-    await message.answer(HELP)
+    await message.answer(HELP, reply_markup=menu_keyboard())
 
 
 @router.callback_query(MenuCallback.filter(F.action == "menu"))
